@@ -1,4 +1,5 @@
 const Stock = require('../models/stock');
+const StockPairStats = require('../models/stockPairStats');
 
 // Function to get all stocks
 const getStocks = async (req, res) => {
@@ -207,24 +208,6 @@ const calculateLFSD = (stock1Trimmed, stock2Trimmed) => {
 
 
 
-// Helper functions for calculations
-const calculateMean = (data) => data.reduce((acc, value) => acc + value, 0) / data.length;
-
-const calculateStandardDeviation = (data, mean) => {
-    const variance = data.reduce((acc, value) => acc + Math.pow(value - mean, 2), 0) / data.length;
-    return Math.sqrt(variance);
-};
-
-const calculateZScore = (value, mean, stdDev) => (stdDev !== 0) ? (value - mean) / stdDev : 0;
-
-const correlation = (arr1, arr2) => {
-    const mean1 = calculateMean(arr1);
-    const mean2 = calculateMean(arr2);
-    const covariance = arr1.reduce((sum, val, i) => sum + ((val - mean1) * (arr2[i] - mean2)), 0) / (arr1.length - 1);
-    const stdDev1 = calculateStandardDeviation(arr1, mean1);
-    const stdDev2 = calculateStandardDeviation(arr2, mean2);
-    return (stdDev1 * stdDev2 !== 0) ? covariance / (stdDev1 * stdDev2) : 0;
-};
 
 
 // Function to get stock pairs by sectors
@@ -388,80 +371,111 @@ const getStockPairClosePrices = async (req, res) => {
         res.status(500).json({ message: "Error fetching close prices for the stock pair", error });
     }
 };
+
+
+
+// Helper functions for calculations
+const calculateMean = (data) => data.reduce((acc, value) => acc + value, 0) / data.length;
+
+const calculateStandardDeviation = (data, mean) => {
+    const variance = data.reduce((acc, value) => acc + Math.pow(value - mean, 2), 0) / data.length;
+    return Math.sqrt(variance);
+};
+
+const calculateZScore = (value, mean, stdDev) => (stdDev !== 0) ? (value - mean) / stdDev : 0;
+
+const correlation = (arr1, arr2) => {
+    const mean1 = calculateMean(arr1);
+    const mean2 = calculateMean(arr2);
+    const covariance = arr1.reduce((sum, val, i) => sum + ((val - mean1) * (arr2[i] - mean2)), 0) / (arr1.length - 1);
+    const stdDev1 = calculateStandardDeviation(arr1, mean1);
+    const stdDev2 = calculateStandardDeviation(arr2, mean2);
+    return (stdDev1 * stdDev2 !== 0) ? covariance / (stdDev1 * stdDev2) : 0;
+};
+
 const getStockPairStats = async (req, res) => {
     const { symbol1, symbol2 } = req.params;
 
     try {
-        // Fetch stock data for both stocks in parallel
+        // Fetch data for both stocks
         const [stock1Data, stock2Data] = await Promise.all([
             Stock.findOne({ symbol: symbol1 }).select('quotes sector'),
             Stock.findOne({ symbol: symbol2 }).select('quotes sector')
         ]);
 
-        // Validate data and ensure both stocks belong to the same sector
+        // Validate data
         if (!stock1Data || !stock2Data || stock1Data.sector !== stock2Data.sector) {
             return res.status(404).json({ message: "Data not found for one or both stocks or stocks are not in the same sector" });
         }
 
-        // Extract stock prices and dates from the quotes data
-        const stock1Quotes = stock1Data.quotes.map(item => ({ date: item.date, closePrice: item.closePrice }));
-        const stock2Quotes = stock2Data.quotes.map(item => ({ date: item.date, closePrice: item.closePrice }));
+        const stock1Prices = stock1Data.quotes.map(item => item.closePrice).filter(price => price != null && !isNaN(price));
+        const stock2Prices = stock2Data.quotes.map(item => item.closePrice).filter(price => price != null && !isNaN(price));
 
-        // Ensure that both stocks have quotes data
-        if (stock1Quotes.length === 0 || stock2Quotes.length === 0) {
-            return res.status(400).json({ message: "Not enough data points to calculate statistics." });
+        // Validate prices
+        if (!stock1Prices.length || !stock2Prices.length) {
+            return res.status(400).json({ message: "One or both stocks have no valid prices." });
         }
 
-        // Use the minimum length of data available for both stocks
-        const length = Math.min(stock1Quotes.length, stock2Quotes.length);
-        const stock1Prices = stock1Quotes.slice(0, length).map(item => item.closePrice);
-        const stock2Prices = stock2Quotes.slice(0, length).map(item => item.closePrice);
-        const dates = stock1Quotes.slice(0, length).map(item => item.date);
+        const length = Math.min(stock1Prices.length, stock2Prices.length);
+        const dates = stock1Data.quotes.slice(0, length).map(item => item.date);
 
-        // Calculate rolling price ratios
-        const priceRatios = stock1Prices.map((price1, i) => ({
+        // Calculate price ratios
+        const priceRatios = stock1Prices.slice(0, length).map((price1, i) => ({
             date: dates[i],
             priceRatio: price1 / stock2Prices[i]
         }));
 
-        // Calculate rolling Z-Scores for price ratios
-        const meanPR = calculateMean(priceRatios.map(pr => pr.priceRatio));
-        const prStdDev = calculateStandardDeviation(priceRatios.map(pr => pr.priceRatio), meanPR);
-        const zScores = priceRatios.map(({ priceRatio, date }) => ({
-            date,
+        const numericPriceRatios = priceRatios.map(pr => pr.priceRatio);
+
+        // Validate price ratios
+        if (!numericPriceRatios.length || numericPriceRatios.some(isNaN)) {
+            return res.status(400).json({
+                message: "Statistics could not be calculated due to invalid or insufficient data.",
+                debugInfo: { priceRatios }
+            });
+        }
+
+        // Calculate statistics
+        const meanPR = calculateMean(numericPriceRatios);
+        const prStdDev = calculateStandardDeviation(numericPriceRatios, meanPR);
+
+        if (isNaN(meanPR) || isNaN(prStdDev)) {
+            return res.status(400).json({
+                message: "Statistics could not be calculated due to invalid data.",
+                debugInfo: { numericPriceRatios, meanPR, prStdDev }
+            });
+        }
+
+        // Calculate Z-Scores and correlations
+        const zScores = numericPriceRatios.map((priceRatio, i) => ({
+            date: dates[i],
             zScore: calculateZScore(priceRatio, meanPR, prStdDev)
         }));
 
-        // Calculate rolling correlation at each point in time
         const correlationValues = stock1Prices.map((_, i) => {
             const corr = correlation(stock1Prices.slice(0, i + 1), stock2Prices.slice(0, i + 1));
             return { date: dates[i], correlation: corr };
         });
 
-        // Get the last Z-Score and last Correlation
-        const lastZScore = zScores[zScores.length - 1] ? zScores[zScores.length - 1].zScore : "N/A";
-        const lastCorrelation = correlationValues[correlationValues.length - 1] ? correlationValues[correlationValues.length - 1].correlation : "N/A";
-
-        // Additional metrics for price ratios
-        const cashNeutralPercentage = (stock2Prices[stock2Prices.length - 1] / stock1Prices[stock1Prices.length - 1]) * 100;
-        const closePR = priceRatios[priceRatios.length - 1].priceRatio;
-        const minPR = Math.min(...priceRatios.map(pr => pr.priceRatio));
-        const maxPR = Math.max(...priceRatios.map(pr => pr.priceRatio));
+        // Final calculations
+        const cashNeutralPercentage = (stock2Prices[length - 1] / stock1Prices[length - 1]) * 100;
+        const closePR = numericPriceRatios[numericPriceRatios.length - 1];
+        const minPR = Math.min(...numericPriceRatios);
+        const maxPR = Math.max(...numericPriceRatios);
         const SD1 = meanPR + prStdDev;
         const SD2 = meanPR + (2 * prStdDev);
         const SD2_7 = meanPR + (2.7 * prStdDev);
         const SD3 = meanPR + (3 * prStdDev);
 
-        // Return the full statistics along with data for the graphs
         res.status(200).json({
             stock1: symbol1,
             stock2: symbol2,
-            dates: dates,  // Dates for the graph
-            zScores: zScores,  // Z-Scores for the graph
-            priceRatios: priceRatios,  // Rolling price ratios
-            correlationValues: correlationValues,  // Time-series correlation for the graph
-            lastZScore: lastZScore,  // Last Z-Score
-            lastCorrelation: lastCorrelation,  // Last Correlation
+            dates,
+            zScores,
+            priceRatios,
+            correlationValues,
+            lastZScore: zScores[zScores.length - 1]?.zScore || 0,
+            lastCorrelation: correlationValues[correlationValues.length - 1]?.correlation || 0,
             detailedStats: {
                 cashNeutralPercentage: cashNeutralPercentage.toFixed(2),
                 prStdDev: prStdDev.toFixed(4),
@@ -475,12 +489,14 @@ const getStockPairStats = async (req, res) => {
                 SD3: SD3.toFixed(4)
             }
         });
-
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Error calculating pair stats", error });
+        console.error("Error details:", error);
+        res.status(500).json({ message: "Error calculating pair stats", error: error.message });
     }
 };
+
+
+
 
 module.exports = {
     getStocks,
@@ -493,3 +509,4 @@ module.exports = {
     getStockPair,
     getStockPairClosePrices
 };
+
