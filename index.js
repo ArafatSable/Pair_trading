@@ -378,14 +378,14 @@ const app = express();
 const server = http.createServer(app); // Create HTTP server for socket.io
 const io = new Server(server, {
     cors: {
-        origin: ['http://127.0.0.1:5500', 'http://localhost:3000'], // Allow both origins
+        origin: ['http://127.0.0.1:5500', 'https://pairtrading.netlify.app'], // Allow both origins
         methods: ['GET', 'POST'],
     },
 });
 
 // Middleware Configuration
 app.use(cors({
-    origin: ['http://127.0.0.1:5500', 'http://localhost:3000'], // Allow both origins
+    origin: ['http://127.0.0.1:5500', 'https://pairtrading.netlify.app'], // Allow both origins
     methods: ['GET', 'POST'],
     credentials: true,
 }));
@@ -441,7 +441,7 @@ mongoose
         });
 
         // Schedule Daily Seed Task
-        cron.schedule('35 11 * * *', async () => {
+        cron.schedule('1 20 * * *', async () => {
             console.log('Running the daily seed task...');
             try {
                 clearInterval(intervalId); // Pause periodic updates
