@@ -34,6 +34,31 @@ router.get('/pair/stockpair', getStockPair);
 router.get('/p/sectors', getStockPairsBySectors);
 router.get('/g/close-prices/:symbol1/:symbol2/:period', getStockPairClosePrices);
 
+// New Z-Score endpoint
+router.get('/pair/:symbol1/:symbol2/zscore', async (req, res) => {
+    try {
+        // Utilize the existing getStockPairStats to fetch Z-Scores
+        const { symbol1, symbol2 } = req.params;
+
+        const stockPairStats = await getStockPairStats(req, res);
+
+        if (stockPairStats && stockPairStats.zScores) {
+            const zScores = stockPairStats.zScores; // Extract Z-Scores
+            return res.status(200).json({
+                stock1: symbol1,
+                stock2: symbol2,
+                zScores: zScores,
+            });
+        } else {
+            return res.status(404).json({ message: "No Z-Scores available for the pair." });
+        }
+    } catch (error) {
+        console.error('Error fetching Z-Scores:', error);
+        res.status(500).json({ message: "Error fetching Z-Scores.", error });
+    }
+});
+
+// Sectors endpoint
 router.get('/s/sectors', (req, res) => {
     res.status(200).json(sectors);
 });
