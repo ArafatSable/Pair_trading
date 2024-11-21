@@ -441,7 +441,7 @@ mongoose
         });
 
         // Schedule Daily Seed Task
-        cron.schedule('12 14 * * *', async () => {
+        cron.schedule('35 11 * * *', async () => {
             console.log('Running the daily seed task...');
             try {
                 clearInterval(intervalId); // Pause periodic updates
